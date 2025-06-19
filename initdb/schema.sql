@@ -1,4 +1,4 @@
--- 1. UUID
+-- 1. UUID extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- 2. Ajustes de la partida
@@ -49,7 +49,8 @@ CREATE TABLE rounds (
   game_id    UUID NOT NULL REFERENCES games(game_id)        ON DELETE CASCADE,
   number     INTEGER NOT NULL,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ended_at   TIMESTAMPTZ NULL
+  ended_at   TIMESTAMPTZ NULL,
+  CONSTRAINT unique_round_number UNIQUE (game_id, number)
 );
 
 -- 8. Preguntas / questions
@@ -101,3 +102,55 @@ CREATE INDEX ON responses(question_id);
 CREATE INDEX ON responses(player_id);
 CREATE INDEX ON team_scores(round_id);
 CREATE INDEX ON team_scores(team_id);
+
+-- 13. Un único host por sala
+CREATE UNIQUE INDEX one_host_per_room
+  ON players(room_id)
+  WHERE is_host;
+
+-- 14. Un único juego activo por sala (ended_at IS NULL)
+CREATE UNIQUE INDEX one_active_game_per_room
+  ON games(room_id)
+  WHERE ended_at IS NULL;
+
+-- 15. Trigger para asegurar máximo de jugadores por equipo
+-- 15.1. Función plpgsql
+CREATE OR REPLACE FUNCTION enforce_max_players_per_team()
+RETURNS trigger AS $$
+DECLARE
+  max_allowed   INTEGER;
+  current_count INTEGER;
+BEGIN
+  -- Si no hay equipo asignado, no hacemos nada
+  IF NEW.team_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- Obtener el límite de jugadores por equipo desde settings
+  SELECT s.max_players_per_team
+    INTO max_allowed
+    FROM rooms r
+    JOIN settings s ON r.settings_id = s.settings_id
+    WHERE r.room_id = NEW.room_id;
+
+  -- Contar cuántos jugadores ya están en ese equipo (excluyendo el propio registro en UPDATE)
+  SELECT COUNT(*)
+    INTO current_count
+    FROM players
+    WHERE team_id = NEW.team_id
+      AND (TG_OP = 'INSERT' OR player_id <> NEW.player_id);
+
+  IF current_count >= max_allowed THEN
+    RAISE EXCEPTION 'El equipo % ya tiene el número máximo de jugadores (%).', NEW.team_id, max_allowed;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 15.2. Trigger sobre players
+CREATE TRIGGER trg_enforce_max_players_per_team
+BEFORE INSERT OR UPDATE ON players
+FOR EACH ROW
+WHEN (NEW.team_id IS NOT NULL)
+EXECUTE PROCEDURE enforce_max_players_per_team();
