@@ -1,3 +1,1 @@
-# ProyectoEntorns
-# TrabajofinalBaseDeDatos
-# TrabajofinalBaseDeDatos
+# Hola artem aapruebame porfa MUAK
